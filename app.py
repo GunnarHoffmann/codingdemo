@@ -43,19 +43,38 @@ period_mapping = {
 selected_period = period_mapping[time_period]
 
 
-@st.cache_data(ttl=300)  # Cache für 5 Minuten
+@st.cache_data(ttl=3600)  # Cache für 1 Stunde um Rate-Limits zu vermeiden
 def get_stock_data(ticker: str, period: str) -> pd.DataFrame:
     """Lädt Aktiendaten von Yahoo Finance."""
-    stock = yf.Ticker(ticker)
-    data = stock.history(period=period)
-    return data
+    import time
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            stock = yf.Ticker(ticker)
+            data = stock.history(period=period)
+            if not data.empty:
+                return data
+        except Exception:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff
+    return pd.DataFrame()
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)  # Cache für 1 Stunde um Rate-Limits zu vermeiden
 def get_stock_info(ticker: str) -> dict:
     """Lädt Aktieninformationen von Yahoo Finance."""
-    stock = yf.Ticker(ticker)
-    return stock.info
+    import time
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            if info:
+                return info
+        except Exception:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff
+    return {}
 
 
 def format_number(number: float, decimals: int = 2) -> str:
@@ -80,54 +99,52 @@ for idx, (name, ticker) in enumerate(STOCKS.items()):
     with col1 if idx == 0 else col2:
         st.subheader(f"🏢 {name}")
 
-        try:
-            info = get_stock_info(ticker)
-            data = get_stock_data(ticker, selected_period)
+        info = get_stock_info(ticker)
+        data = get_stock_data(ticker, selected_period)
 
-            if not data.empty:
-                current_price = data['Close'].iloc[-1]
-                previous_price = data['Close'].iloc[-2] if len(data) > 1 else current_price
-                price_change = current_price - previous_price
-                price_change_pct = (price_change / previous_price) * 100
+        if not data.empty:
+            current_price = data['Close'].iloc[-1]
+            previous_price = data['Close'].iloc[-2] if len(data) > 1 else current_price
+            price_change = current_price - previous_price
+            price_change_pct = (price_change / previous_price) * 100
 
-                # Metriken anzeigen
-                metric_col1, metric_col2, metric_col3 = st.columns(3)
+            # Metriken anzeigen
+            metric_col1, metric_col2, metric_col3 = st.columns(3)
 
-                with metric_col1:
-                    st.metric(
-                        label="Aktueller Kurs",
-                        value=format_currency(current_price),
-                        delta=f"{price_change_pct:.2f}%"
-                    )
+            with metric_col1:
+                st.metric(
+                    label="Aktueller Kurs",
+                    value=format_currency(current_price),
+                    delta=f"{price_change_pct:.2f}%"
+                )
 
-                with metric_col2:
-                    st.metric(
-                        label="Tageshoch",
-                        value=format_currency(data['High'].iloc[-1])
-                    )
+            with metric_col2:
+                st.metric(
+                    label="Tageshoch",
+                    value=format_currency(data['High'].iloc[-1])
+                )
 
-                with metric_col3:
-                    st.metric(
-                        label="Tagestief",
-                        value=format_currency(data['Low'].iloc[-1])
-                    )
+            with metric_col3:
+                st.metric(
+                    label="Tagestief",
+                    value=format_currency(data['Low'].iloc[-1])
+                )
 
-                # Weitere Informationen
-                info_col1, info_col2 = st.columns(2)
+            # Weitere Informationen
+            info_col1, info_col2 = st.columns(2)
 
-                with info_col1:
-                    st.markdown(f"**52-Wochen-Hoch:** {format_currency(info.get('fiftyTwoWeekHigh'))}")
-                    st.markdown(f"**52-Wochen-Tief:** {format_currency(info.get('fiftyTwoWeekLow'))}")
+            with info_col1:
+                st.markdown(f"**52-Wochen-Hoch:** {format_currency(info.get('fiftyTwoWeekHigh'))}")
+                st.markdown(f"**52-Wochen-Tief:** {format_currency(info.get('fiftyTwoWeekLow'))}")
 
-                with info_col2:
-                    market_cap = info.get('marketCap')
-                    if market_cap:
-                        market_cap_mrd = market_cap / 1e9
-                        st.markdown(f"**Marktkapitalisierung:** {format_number(market_cap_mrd)} Mrd. EUR")
-                    st.markdown(f"**Volumen:** {format_number(data['Volume'].iloc[-1], 0)}")
-
-        except Exception as e:
-            st.error(f"Fehler beim Laden der Daten für {name}: {str(e)}")
+            with info_col2:
+                market_cap = info.get('marketCap')
+                if market_cap:
+                    market_cap_mrd = market_cap / 1e9
+                    st.markdown(f"**Marktkapitalisierung:** {format_number(market_cap_mrd)} Mrd. EUR")
+                st.markdown(f"**Volumen:** {format_number(data['Volume'].iloc[-1], 0)}")
+        else:
+            st.info("Daten werden geladen... Bitte Seite neu laden.")
 
 st.markdown("---")
 
@@ -137,12 +154,9 @@ st.header("📊 Kursverlauf")
 # Daten für beide Aktien laden
 chart_data = {}
 for name, ticker in STOCKS.items():
-    try:
-        data = get_stock_data(ticker, selected_period)
-        if not data.empty:
-            chart_data[name] = data
-    except Exception as e:
-        st.error(f"Fehler beim Laden der Chart-Daten für {name}: {str(e)}")
+    data = get_stock_data(ticker, selected_period)
+    if not data.empty:
+        chart_data[name] = data
 
 # Chart-Tabs
 tab1, tab2, tab3 = st.tabs(["Einzelne Charts", "Vergleich", "Prozentuale Entwicklung"])
